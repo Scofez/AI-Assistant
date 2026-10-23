@@ -68,23 +68,37 @@ Fern is not one of your Claude Code sessions. She stands above them. Her `claude
 | `list_sessions` | Live sessions from the hooks: project, state, what it waits for, last summary. Also Fern's jobs. |
 | `read_session_output` | Last answer of one session, read from its transcript on demand. |
 | `find_project` | Finds project folders by name, in known sessions and `projectRoots`. |
-| `start_job` | Starts a background `claude -p` job in a project folder inside your home folder. Max 3 at a time. |
+| `start_job` | Starts a background `claude -p` job in a project folder inside your home folder, only when you ask for one. Max 3 at a time. |
 | `get_job`, `cancel_job` | Job status and result, or stop it. |
 
 When a job ends, Fern tells you in the bubble and the panel, and speaks it. Her chat uses only these tools (`--strict-mcp-config`, `--allowedTools mcp__fern`). Your other MCP servers are not loaded in her chat.
 
-### Full access with confirmation of critical actions
+### Full access, with confirmation only before deletes and large changes
 
-Fern has full access to the Mac: Bash, files, the web, apps, and your MCP servers. Coding work goes to jobs (Claude sessions). Fern and every job run with `--permission-mode manual` and `--permission-prompt-tool mcp__fern__approve`. So each action that needs permission goes to the app first. `lib/guard.js` decides with fixed rules:
+Fern has full access to the Mac: Bash, files, the web, apps, and your MCP servers. Fern does the work herself, coding included. She starts a job only when you ask for a separate session or a background job. Fern and every job run with `--permission-mode manual` and `--permission-prompt-tool mcp__fern__approve`. So each action that needs permission goes to the app first. `lib/guard.js` sorts it into groups with fixed rules, and only the groups in `confirmActions` ask:
 
-- **Critical, needs your OK:** `git push`, history rewrites, `gh` changes (comments, PRs, issues), `rm`/`mv`/`-delete`, `sudo`, `curl` that sends data, `ssh`/`scp`/`rsync`, cloud CLIs, installs, process and system changes, `osascript`, inline code (`python -c`, `| sh`), reads or writes of secrets (`~/.ssh`, `.env`, keys), writes to shell profiles, Claude settings, or system folders, MCP tools that create, send, post, comment, or delete, and messages to other Claude sessions. A job may not write outside its project.
-- **Everything else** runs without asking.
+| Group | Examples | Asks by default |
+|---|---|---|
+| `delete` | `rm`, `rmdir`, `trash`, `find … -delete`, `git rm`, `git clean -f`, `git branch -D`, `git stash drop`, MCP tools that delete, remove, or archive | **yes** |
+| `large-change` | `git reset --hard`, `git checkout -- .`, `git restore .`, `git rebase`, overwriting a file of 300+ lines, an edit that replaces 300+ lines (`largeChangeLines`) | **yes** |
+| `publish` | `git push`, `gh` changes (comments, PRs, issues), `npm publish`, cloud CLIs | no |
+| `network` | `curl` that sends data, `ssh`, `scp`, `rsync`, `wget` | no |
+| `system` | `sudo`, installs, `kill`, `launchctl`, `chmod`, `defaults write`, `osascript` | no |
+| `inline-code` | `python -c`, `node -e`, `… \| sh`, `eval` | no |
+| `secrets` | reading or writing `~/.ssh`, `.env`, keys; writing shell profiles, Claude settings, system folders, or (for a job) outside its project | no |
+| `messages` | MCP tools that send, post, comment, or create; messages to other Claude sessions | no |
 
-A critical action shows **Allow / Deny** in the bubble and in the panel (keys `y` / `n`, or `/allow`, `/deny`), and Fern says it aloud. Voice cannot answer, so a recording cannot approve anything. With no answer in `approvalTimeoutSeconds` (300), the action is denied. The log shows each question and answer (`[approval]`).
+To make a group ask again, add it to `confirmActions` in `~/.claude-avatar/config.json`, for example `["delete", "large-change", "publish", "secrets"]`.
+
+A confirmation shows **Allow / Deny** in the bubble and in the panel (keys `y` / `n`, or `/allow`, `/deny`), and Fern says it aloud. Voice cannot answer, so a recording cannot approve anything. With no answer in `approvalTimeoutSeconds` (300), the action is denied. The log shows each question and answer (`[approval]`).
+
+**Learned permissions.** When you allow the same exact action `learnAfterApprovals` times (3), Fern saves it and does it without asking from then on. "The same exact action" means the same command in the same folder, or the same tool on the same file. A pattern is never learned, so a learned OK can never cover a different command or file. One Deny of that action removes it. In the panel, `/permissions` lists what she learned, and `/forget <number>` or `/forget all` removes it. They are saved in `~/.claude-avatar/approvals.json` (owner read/write only). Set `learnAfterApprovals` to `0` to turn learning off.
 
 Fern works in the empty folder `~/.claude-avatar/workspace`, so every file outside it goes through the check.
 
 The rules are best effort. A command can hide what it does. Read the command in the confirmation before you click Allow.
+
+**Risk:** with the default groups, Fern pushes code, posts comments and messages, runs `sudo`, sends data, and reads secret files without asking. A voice command can start any of these, and voice ID can be passed with a recording of your voice. Add the groups that you want back to `confirmActions`.
 
 Your global `defaultMode: "auto"` does not apply to Fern or jobs: they always set `manual`. Do not set `jobPermissionMode` to `"bypassPermissions"`: that turns off all checks for jobs.
 
@@ -98,10 +112,10 @@ Left of Fern, a small avatar stands for each open Claude Code session. The box a
 
 - **Your prompts** to a session do not show over Fern. A small envelope drops into that session's avatar instead, as if the prompt was delivered. Notices from sessions ("… needs you", "Claude finished in …") still show in Fern's bubble.
 - **Subagents** of a session show as clones in that session's colors, with their number ("Agent #1").
-- **Fern's jobs** show as small Fern clones with their number ("Fern #1").
 - **Fern's own subagents** (her Agent or Task tool calls) show as Fern clones next to her, with their description ("Fern agent #1" when there is none). A clone goes away when its agent ends or when Fern's `claude -p` process stops. A click shows Fern's chat in the panel.
 - **Click a session or its agent:** its Terminal tab comes to the front. When the session is closed, a new Terminal window opens with `claude --resume <id>` in its folder. The first click asks for the Automation permission for Terminal. Terminal and iTerm2 are supported.
-- **Click a Fern clone:** the panel shows the job.
+- **Click a Fern clone:** the panel shows Fern's chat.
+- Only Claude sessions in your terminals and subagents show here. Fern's own `claude -p` runs and her jobs do not get an avatar: a job shows in its own panel tab.
 
 Fern finds the sessions that already run when she starts: Claude Code keeps a registry of its running interactive sessions in `~/.claude/sessions/<pid>.json` (session id, folder, version, busy or idle). Fern reads it at start and every 30 s, so a session shows before it sends a hook. She reads only the `<pid>.json` files, never the `.key` files next to them. `hooks/forward.sh` also sends the hook's parent process id, so the app can find the session's terminal. When a `/clear` or `/resume` inside a session changes its id, the old avatar goes away. At most 8 avatars show; the rest are counted in a "+N more" box. The empty parts of the window let mouse clicks through to the desktop.
 
@@ -116,7 +130,7 @@ Background subagents end with the `SubagentStop` hook. Run `npm run install-hook
 
      | Kind | Commands | What happens |
      |---|---|---|
-     | Fern | `/help`, `/resume`, `/clear` (`/new`), `/model [name]`, `/effort [level]`, `/sessions`, `/jobs`, `/cancel <id>`, `/allow`, `/deny`, `/version`, `/update` | Fern runs them herself. `/model` and `/effort` change only Fern (`fernModel`, `fernEffort` in the config), never your other Claude sessions. `/model default` goes back to the default. |
+     | Fern | `/help`, `/resume`, `/clear` (`/new`), `/model [name]`, `/effort [level]`, `/permissions`, `/forget <n>` (or `all`), `/sessions`, `/jobs`, `/cancel <id>`, `/allow`, `/deny`, `/version`, `/update` | Fern runs them herself. `/model` and `/effort` change only Fern (`fernModel`, `fernEffort` in the config), never your other Claude sessions. `/model default` goes back to the default. |
      | Claude | `/usage`, `/context`, `/compact`, `/mcp`, `/insights`, `/recap`, `/list-agents` | Sent to Fern's Claude session. Most run locally at no cost. `/mcp` runs only as a list. |
      | Skills | every skill that Claude reports, for example `/code-review` | Sent to Fern as a prompt, so the skill runs in her chat. |
 
@@ -127,7 +141,7 @@ Background subagents end with the `SubagentStop` hook. Run `npm run install-hook
 
    - **Window buttons:** the usual macOS buttons. Red (or Esc, or Cmd+Shift+K) hides the panel and keeps its tabs. Yellow minimizes. Green zooms the panel to fill the screen (it stays in the same Space). The panel is a normal window: other windows, for example a Terminal tab that you open from a session avatar, can go above it. A confirmation brings it to the top. Fern always stays on top of it.
    - **Tabs:** "Fern · main session" is your chat with Fern. Each job that Fern starts gets its own tab ("Fern #1 · project"). It logs the job live, like a Claude Code session: `⏺` for Claude's text and tool calls, `⎿` for tool results. The dot shows the state: blue running, mint done, orange failed or waiting for your OK. A bold tab has new lines. Cmd+1 to Cmd+9 switch tabs. A tab of a finished job can be closed with ×.
-   - A confirmation from a job shows in that job's tab. A click on a Fern clone next to the avatar opens its tab.
+   - A confirmation from a job shows in that job's tab.
    - Each tab keeps its last 1500 lines in memory only. Tool results show their first 8 lines.
 
 Voice and keyboard use the same Fern chat. The panel shows the full conversation and the tools that Fern uses. History is in memory only.
@@ -207,6 +221,9 @@ File: `~/.claude-avatar/config.json`. Created on first launch. Reloaded when it 
 | `phraseEndSilenceMs` | `1500` | Silence that ends a spoken phrase. Raise it if you pause often. |
 | `classifierModel` | `"haiku"` | Model that decides if a phrase with "Fern" is a request. |
 | `approvalTimeoutSeconds` | `300` | Time to answer a confirmation. Then the action is denied. |
+| `confirmActions` | `["delete", "large-change"]` | Groups that ask before they run (see the table above). |
+| `largeChangeLines` | `300` | Lines that make a file change "large". |
+| `learnAfterApprovals` | `3` | Allows of the same exact action before Fern stops asking. `0` turns it off. |
 | `panelShortcut` | `"CommandOrControl+Shift+K"` | Global shortcut for the panel (Electron accelerator). |
 | `speakTypedReplies` | `false` | Speak replies to typed questions. |
 | `projectRoots` | `["~/personal", "~/work"]` | Folders that `find_project` searches (one level). |
@@ -259,6 +276,7 @@ curl -X POST --data '{"hook_event_name":"Stop","session_id":"a","cwd":"/tmp/demo
 
 - Transcripts are read only on Stop and when Fern reads a session, then dropped. Nothing is logged or stored.
 - Your prompt is shown in the bubble and not kept.
+- Learned permissions are in `~/.claude-avatar/approvals.json` (the action text and a count, owner read/write only).
 - Your voiceprint is `~/.claude-avatar/voiceprint.json` (numbers only, no audio, owner read/write only). Tray > *Forget my voice* deletes it.
 - Audio is never written to disk except the short whisper temp file.
 

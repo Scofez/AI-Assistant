@@ -21,6 +21,7 @@ const { runningSessions } = require('./lib/session-registry');
 const updates = require('./lib/updates');
 const { MCP_CONFIG_FILE, newToken, writeMcpConfig, createMcpHandler } = require('./lib/mcp');
 const guard = require('./lib/guard');
+const approvalMemory = require('./lib/approval-memory');
 const terminal = require('./lib/terminal');
 
 const MAX_BODY = 1024 * 1024;
@@ -37,7 +38,6 @@ const MAX_MINIS = 8;
 const CROWD_THROTTLE_MS = 150;
 const PRUNE_INTERVAL_MS = 30 * 1000;
 const STALE_AGENT_MS = 60 * 60 * 1000;
-const FINISHED_JOB_VISIBLE_MS = 10 * 1000;
 const AGENT_TOOLS = new Set(['Task', 'Agent']);
 const UPDATE_CHECK_FIRST_MS = 15 * 1000;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -59,6 +59,8 @@ const FERN_COMMANDS = {
   allow: 'Allow the newest confirmation',
   deny: 'Deny the newest confirmation',
   version: 'Claude Code versions (installed, newest, sessions)',
+  permissions: 'Actions that Fern does without asking, because you allowed them often',
+  forget: 'Forget a learned permission: /forget <number> or /forget all',
   update: 'Update Claude Code',
 };
 // Claude commands that only read, or that change only Fern's chat. Fern sends them to her Claude session.
@@ -166,7 +168,6 @@ const jobs = createJobs({
   onChange: (job) => {
     jobTab(job);
     scheduleCrowd();
-    if (job.status !== 'running') setTimeout(scheduleCrowd, FINISHED_JOB_VISIBLE_MS + 100);
     const key = `job:${job.id}`;
     if (job.status === 'running') state.handle('PreToolUse', key);
     else if (job.status === 'cancelled') state.handle('SessionEnd', key);
@@ -420,12 +421,6 @@ function buildCrowd() {
       minis.push({ key: `a:${s.id}:${a.number}`, kind: 'agent', title: `Agent #${a.number}`, place: title, state: 'working', seed: s.id, number: a.number });
     }
   }
-  const now = Date.now();
-  for (const j of jobs.list()) {
-    if (j.status !== 'running' && now - j.endedAt > FINISHED_JOB_VISIBLE_MS) continue;
-    const jobState = { running: 'working', done: 'done' }[j.status] ?? 'attention';
-    minis.push({ key: `j:${j.id}`, kind: 'job', title: `Fern #${j.number}`, place: j.project, state: jobState, seed: 'fern', number: j.number });
-  }
   for (const a of fernAgents.values()) {
     const name = `Fern agent #${a.number}`;
     minis.push({ key: `f:${a.id}`, kind: 'fernAgent', title: a.description || name, place: name, state: 'working', seed: 'fern', number: a.number });
@@ -504,13 +499,6 @@ async function onMiniClick(key) {
   if (kind === 'f') {
     showPanel();
     sendPanel('panel:select', 'fern');
-    return;
-  }
-  if (kind === 'j') {
-    const job = jobs.get(id);
-    if (!job) return;
-    showPanel();
-    sendPanel('panel:select', job.id);
     return;
   }
   if (kind !== 's' && kind !== 'a') return;
@@ -954,6 +942,19 @@ function sendStatus() {
   sendPanel('panel:status', parts.join(' · '));
 }
 
+function permissionLines() {
+  const { confirmActions, learnAfterApprovals, largeChangeLines } = config.get();
+  const learned = approvalMemory.listLearned();
+  return [
+    `Fern asks before: ${confirmActions.join(', ') || 'nothing'} (large change = ${largeChangeLines}+ lines).`,
+    `After ${learnAfterApprovals} Allows of the same action, she stops asking for it. One Deny resets it.`,
+    '',
+    learned.length ? 'Learned (Fern does these without asking):' : 'No learned permissions yet.',
+    ...learned.map((e, i) => `${String(i + 1).padStart(2)}. ${e.description}  (${e.count}×, last ${String(e.lastAllowedAt).slice(0, 10)})`),
+    ...(learned.length ? ['', 'Forget one with /forget <number>, or all with /forget all.'] : []),
+  ].join('\n');
+}
+
 function helpText() {
   const rows = commandList().filter((c) => c.kind !== 'skill').map((c) => `/${c.name.padEnd(12)} ${c.description}`);
   const skills = commandList().filter((c) => c.kind === 'skill').map((c) => `/${c.name}`);
@@ -1004,6 +1005,13 @@ function handlePanelInput(text) {
       return setFernOption('fernEffort', rest[0], (v) => EFFORT_LEVELS.includes(v), 'effort');
     case '/version':
       return showVersions();
+    case '/permissions':
+      return panelLine('info', permissionLines());
+    case '/forget': {
+      if (!rest[0]) return panelLine('info', 'Use /forget <number> (see /permissions) or /forget all.');
+      const count = approvalMemory.forget(rest[0] === 'all' ? 'all' : rest[0]);
+      return panelLine('info', count ? `Forgot ${count} permission(s). Fern asks again for them.` : 'No permission with that number. See /permissions.');
+    }
     case '/update':
       return updateClaude();
     case '/allow':
@@ -1181,12 +1189,29 @@ function createApproveTool() {
     },
     handler: async ({ tool_name: toolName, input = {} }, caller) => {
       const { cwd, isJob } = callerInfo(caller);
-      const { critical, reason } = guard.check(toolName, input, { cwd, isJob });
+      const cfg = config.get();
+      const { critical, reason } = guard.check(toolName, input, {
+        cwd, isJob, groups: cfg.confirmActions, largeChangeLines: cfg.largeChangeLines,
+      });
       if (!critical) return { behavior: 'allow', updatedInput: input };
-      const isAllowed = await requestApproval({ caller, reason, detail: guard.describe(toolName, input) });
-      return isAllowed
-        ? { behavior: 'allow', updatedInput: input }
-        : { behavior: 'deny', message: 'The owner did not allow this action. Do not try it another way.' };
+      const detail = guard.describe(toolName, input);
+      const sig = approvalMemory.signature(toolName, input, cwd);
+      const tab = caller.startsWith('job:') ? caller.slice(4) : 'fern';
+      // The owner allowed this exact action often enough, so it runs without a question.
+      if (approvalMemory.isLearned(sig)) {
+        panelLine('info', `Allowed without asking (you allowed it before): ${detail}`, tab);
+        return { behavior: 'allow', updatedInput: input };
+      }
+      const isAllowed = await requestApproval({ caller, reason, detail });
+      if (!isAllowed) {
+        approvalMemory.recordDeny(sig);
+        return { behavior: 'deny', message: 'The owner did not allow this action. Do not try it another way.' };
+      }
+      const threshold = cfg.learnAfterApprovals;
+      if (threshold > 0 && approvalMemory.recordAllow(sig, { description: detail, reason, threshold })) {
+        tell('info', `You allowed this ${threshold} times, so I will not ask again for it: ${detail}. Type /permissions to see or undo.`);
+      }
+      return { behavior: 'allow', updatedInput: input };
     },
   };
 }
