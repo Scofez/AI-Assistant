@@ -8,7 +8,8 @@
     "start": "electron .",
     "sprites": "node scripts/make-placeholder-sprites.js",
     "install-hooks": "node scripts/install-hooks.js",
-    "uninstall-hooks": "node scripts/uninstall-hooks.js"
+    "uninstall-hooks": "node scripts/uninstall-hooks.js",
+    "setup": "node scripts/setup.js"
   },
   "devDependencies": {
     "electron": "^33.2.0",

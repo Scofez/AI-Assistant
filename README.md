@@ -19,9 +19,23 @@ macOS only. Node.js and Electron, plain JavaScript, no build step.
 git clone https://github.com/Scofez/AI-Assistant.git
 cd AI-Assistant
 npm install
-npm run sprites      # generates the placeholder pack in sprites/default
+npm run setup
 npm start
 ```
+
+`npm install` installs only the npm packages (Electron, sherpa-onnx-node, pngjs). `npm run setup` does the rest and asks before each change:
+
+1. Checks macOS, Node.js (18 or newer), and the npm packages.
+2. Checks that the `claude` CLI is installed. Log in with `claude` once: Fern uses that account.
+3. Installs whisper.cpp with Homebrew.
+4. Downloads the 3 models to `~/.claude-avatar/models` (about 575 MB): whisper, the speaker model, and Kokoro.
+5. Turns on the Kokoro voice.
+6. Installs the Claude Code hooks (with a backup of `~/.claude/settings.json`).
+7. Adds an optional `fern` / `fern stop` / `fern status` command to `~/.zshrc`.
+
+Run it again at any time. Parts that are ready are skipped. `npm run setup -- --yes` answers yes to every question.
+
+After the setup, you still need to do these steps yourself: set up your voice (tray > Set up my voice…), and allow Microphone and Automation when macOS asks.
 
 Fern appears in the bottom-right corner. The tray icon (a staff ring) holds the menu. There is no Dock icon.
 
