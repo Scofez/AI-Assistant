@@ -1,0 +1,135 @@
+{
+  "frameWidth": 64,
+  "frameHeight": 64,
+  "states": {
+    "idle": {
+      "file": "idle.png",
+      "frames": 4,
+      "fps": 4,
+      "loop": true
+    },
+    "thinking": {
+      "file": "thinking.png",
+      "frames": 4,
+      "fps": 4,
+      "loop": true
+    },
+    "working": {
+      "file": "working.png",
+      "frames": 6,
+      "fps": 10,
+      "loop": true
+    },
+    "attention": {
+      "file": "attention.png",
+      "frames": 4,
+      "fps": 8,
+      "loop": true,
+      "mouthOffsets": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          -2
+        ],
+        [
+          0,
+          -2
+        ],
+        [
+          0,
+          0
+        ]
+      ]
+    },
+    "done": {
+      "file": "done.png",
+      "frames": 6,
+      "fps": 8,
+      "loop": false,
+      "mouthOffsets": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ]
+    },
+    "sleeping": {
+      "file": "sleeping.png",
+      "frames": 4,
+      "fps": 2,
+      "loop": true,
+      "mouthOffsets": [
+        [
+          2,
+          12
+        ],
+        [
+          2,
+          13
+        ],
+        [
+          2,
+          12
+        ],
+        [
+          2,
+          13
+        ]
+      ]
+    },
+    "greet": {
+      "file": "greet.png",
+      "frames": 4,
+      "fps": 6,
+      "loop": false,
+      "mouthOffsets": [
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ]
+    },
+    "talking": {
+      "file": "talking.png",
+      "frames": 2,
+      "fps": 8,
+      "loop": true,
+      "overlay": true
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "claude-avatar",
+  "version": "1.0.0",
+  "description": "A desktop avatar that reacts to Claude Code hooks",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "sprites": "node scripts/make-placeholder-sprites.js",
+    "install-hooks": "node scripts/install-hooks.js",
+    "uninstall-hooks": "node scripts/uninstall-hooks.js"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "pngjs": "^7.0.0"
+  },
+  "dependencies": {
+    "sherpa-onnx-node": "^1.13.8"
+  }
+}

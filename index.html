@@ -1,0 +1,504 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; media-src 'self' blob: mediastream:">
+<style>
+  :root {
+    --ink: #1B1A2E;
+    --paper: #F4F6FA;
+    --paper-you: #E7DDF6;
+    --paper-info: #DDE2EC;
+    --accent: #9D7CC6;
+    --rec: #FF8A3D;
+  }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
+  body { font: 11px/1.35 Menlo, Monaco, monospace; color: var(--ink); }
+
+  #root { height: 100%; display: flex; flex-direction: row; align-items: flex-end; justify-content: flex-end; }
+  #main { height: 100%; flex: none; width: var(--fern-width, 280px); display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+
+  #crowd { display: flex; align-items: flex-end; padding-bottom: 4px; }
+  .mini { width: var(--slot, 92px); display: flex; flex-direction: column; align-items: center; cursor: pointer; }
+  .mini .tag {
+    box-sizing: border-box; max-width: calc(var(--slot, 92px) - 6px); padding: 2px 4px; margin-bottom: 3px;
+    background: var(--paper); border: 2px solid var(--ink); font-size: 9px; line-height: 1.2;
+  }
+  .mini .tag div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mini .tag .place { color: #5A5F73; }
+  .mini.attention .tag { border-color: var(--rec); }
+  .mini.done .tag { border-color: #7FE0C4; }
+  .mini.working .tag, .mini.thinking .tag { border-color: #8FD8FF; }
+  .mini canvas { image-rendering: pixelated; }
+  .mini:hover .tag { background: var(--paper-you); }
+
+  #bubble-area { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 4px; min-height: 0; }
+  #bubble {
+    position: relative; box-sizing: border-box; max-width: 260px; max-height: 100%;
+    padding: 6px 8px; background: var(--paper); border: 2px solid var(--ink);
+    box-shadow: 2px 2px 0 rgba(27, 26, 46, .35);
+    overflow-wrap: anywhere;
+    visibility: hidden;
+  }
+  #bubble.approval { background: #FFF1E6; border-color: var(--rec); }
+  #bubble .detail { margin-top: 4px; font-size: 10px; color: #5A5F73; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  #bubble .actions { display: flex; gap: 6px; margin-top: 6px; }
+  #bubble .actions button { flex: 1; padding: 3px 0; font: 700 11px Menlo, monospace; border: 2px solid var(--ink); border-radius: 0; cursor: pointer; background: var(--paper); color: var(--ink); }
+  #bubble .actions .allow { background: #7FE0C4; }
+  #bubble .text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; }
+  #bubble.show { visibility: visible; }
+  #bubble.you { background: var(--paper-you); }
+  #bubble.info { background: var(--paper-info); font-style: italic; }
+  #bubble .who { font-weight: 700; color: var(--accent); margin-right: 4px; }
+  #bubble.you .who { color: #6C4F99; }
+  /* Pixel tail: two stacked squares toward the character. */
+  #bubble::after, #bubble::before { content: ''; position: absolute; left: 50%; background: var(--ink); }
+  #bubble::after { width: 6px; height: 4px; bottom: -6px; margin-left: -3px; }
+  #bubble::before { width: 2px; height: 2px; bottom: -8px; margin-left: 1px; }
+
+  #stage { position: relative; }
+  canvas { display: block; image-rendering: pixelated; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+
+  #buttons {
+    position: absolute; right: -34px; bottom: 8px;
+    display: flex; flex-direction: column; gap: 6px;
+    opacity: 0; transition: opacity .15s;
+  }
+  body:hover #buttons, #buttons.muted { opacity: 1; }
+  #buttons button {
+    width: 28px; height: 28px; padding: 0; cursor: pointer;
+    background: var(--paper); color: var(--ink);
+    border: 2px solid var(--ink); border-radius: 0; box-shadow: 2px 2px 0 rgba(27, 26, 46, .35);
+    font: 14px/1 -apple-system, sans-serif;
+  }
+  #buttons button:hover { background: var(--paper-you); }
+  #buttons button:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 rgba(27, 26, 46, .35); }
+  #buttons button.off { background: #FFD9C2; position: relative; }
+  #mic.off::after { content: ''; position: absolute; left: 3px; right: 3px; top: 50%; height: 2px; background: var(--ink); transform: rotate(-45deg); }
+  /* Next to the top left of Fern's head. Position is in sprite pixels times the scale. */
+  #ear { position: absolute; left: calc(var(--scale, 3) * 12px); top: calc(var(--scale, 3) * 5px); width: 8px; height: 8px; background: #7FE0C4; border: 2px solid var(--ink); display: none; }
+  #ear.on { display: block; }
+  #ear.hearing { background: var(--rec); }
+  @keyframes blink { 50% { background: var(--paper); } }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+  <div id="root">
+    <div id="crowd" aria-label="Claude sessions"></div>
+    <div id="main">
+    <div id="bubble-area"><div id="bubble" role="status" aria-live="polite"></div></div>
+    <div id="stage">
+      <canvas id="sprite" aria-label="Fern avatar. Click to open the terminal. Drag to move."></canvas>
+      <div id="ear" title="Listening for &quot;Fern&quot;"></div>
+      <div id="buttons">
+        <button id="mic" title="Mute the microphone" aria-label="Mute the microphone" aria-pressed="false">🎙</button>
+        <button id="voice" title="Mute Fern's voice" aria-label="Mute Fern's voice" aria-pressed="false">🔊</button>
+      </div>
+    </div>
+    </div>
+  </div>
+
+<script src="crowd.js"></script>
+
+<script>
+  const BUBBLE_MIN_MS = 8000;
+  const CLICK_SLOP_PX = 4;
+  const SAMPLE_RATE = 16000;
+
+  const canvas = document.getElementById('sprite');
+  const ctx = canvas.getContext('2d');
+  const bubbleEl = document.getElementById('bubble');
+  const micButton = document.getElementById('mic');
+  const voiceButton = document.getElementById('voice');
+  const buttons = document.getElementById('buttons');
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  let pack;            // { manifest, images, scale }
+  let stateName = 'idle';
+  let stateStart = performance.now();
+  let isSpeaking = false;
+  let talkStart = 0;
+
+  // -------------------------------------------------------------------------
+  // Sprite player
+
+  function loadImage(url) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(undefined);
+      img.src = url;
+    });
+  }
+
+  async function setup({ manifest, baseUrl, scale, fernWidth, miniSlotWidth }) {
+    document.documentElement.style.setProperty('--fern-width', `${fernWidth}px`);
+    document.documentElement.style.setProperty('--slot', `${miniSlotWidth}px`);
+    document.documentElement.style.setProperty('--scale', String(scale));
+    const entries = Object.entries(manifest.states ?? {});
+    const images = {};
+    await Promise.all(entries.map(async ([name, spec]) => {
+      images[name] = await loadImage(baseUrl + spec.file);
+    }));
+    canvas.width = manifest.frameWidth * scale;
+    canvas.height = manifest.frameHeight * scale;
+    pack = { manifest, images, scale };
+    lastDrawKey = '';
+  }
+
+  /** Falls back to idle when a state has no sheet. */
+  function resolveState(name) {
+    const { states } = pack.manifest;
+    if (states[name] && pack.images[name]) return name;
+    return 'idle';
+  }
+
+  function frameAt(spec, elapsedMs) {
+    if (reducedMotion.matches) return 0;
+    const raw = Math.floor((elapsedMs / 1000) * spec.fps);
+    return spec.loop ? raw % spec.frames : Math.min(raw, spec.frames - 1);
+  }
+
+  let lastDrawKey = '';
+
+  function draw(now) {
+    requestAnimationFrame(draw);
+    if (!pack) return;
+    const { manifest, images, scale } = pack;
+    const fw = manifest.frameWidth;
+    const fh = manifest.frameHeight;
+    const name = resolveState(stateName);
+    const spec = manifest.states[name];
+    const img = images[name];
+    if (!spec || !img) return;
+    const frame = frameAt(spec, now - stateStart);
+    const talk = manifest.states.talking;
+    const mouthFrame = isSpeaking && talk ? frameAt(talk, now - talkStart) : -1;
+    // Painting is the costly part, so it runs only when the picture changes.
+    const drawKey = `${name}|${frame}|${mouthFrame}|${canvas.width}`;
+    if (drawKey === lastDrawKey) return;
+    lastDrawKey = drawKey;
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, frame * fw, 0, fw, fh, 0, 0, fw * scale, fh * scale);
+
+    if (mouthFrame >= 0 && images.talking) {
+      const [ox, oy] = spec.mouthOffsets?.[frame] ?? [0, 0];
+      ctx.drawImage(images.talking, mouthFrame * fw, 0, fw, fh, ox * scale, oy * scale, fw * scale, fh * scale);
+    }
+  }
+  requestAnimationFrame(draw);
+
+  // -------------------------------------------------------------------------
+  // Bubble: visible for 8 s or until speech ends, whichever is later.
+
+  let bubbleShownAt = 0;
+  let hideTimer;
+
+  function scheduleHide() {
+    clearTimeout(hideTimer);
+    if (isSpeaking || approvals.size) return;
+    const remaining = BUBBLE_MIN_MS - (performance.now() - bubbleShownAt);
+    hideTimer = setTimeout(() => bubbleEl.classList.remove('show'), Math.max(0, remaining));
+  }
+
+  // Questions about critical actions. They stay until answered and come before other messages.
+  const approvals = new Map();
+
+  function showApproval() {
+    const [id, { text, detail }] = approvals.entries().next().value;
+    const body = document.createElement('div');
+    body.className = 'text';
+    const label = document.createElement('span');
+    label.className = 'who';
+    label.textContent = 'Fern:';
+    body.append(label, document.createTextNode(`I need your OK. ${text}`));
+    const detailEl = document.createElement('div');
+    detailEl.className = 'detail';
+    detailEl.textContent = detail;
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    for (const [name, isAllowed] of [['Allow', true], ['Deny', false]]) {
+      const button = document.createElement('button');
+      button.textContent = name;
+      button.className = isAllowed ? 'allow' : 'deny';
+      button.addEventListener('click', () => window.avatar.answerApproval(id, isAllowed));
+      actions.append(button);
+    }
+    clearTimeout(hideTimer);
+    bubbleEl.replaceChildren(body, detailEl, actions);
+    bubbleEl.className = 'show approval';
+  }
+
+  window.avatar.onApproval(({ id, text, detail }) => {
+    approvals.set(id, { text, detail });
+    showApproval();
+  });
+  window.avatar.onApprovalDone(({ id }) => {
+    approvals.delete(id);
+    if (approvals.size) showApproval();
+    else bubbleEl.classList.remove('show', 'approval');
+  });
+
+  function showBubble({ who, text }) {
+    if (approvals.size) return;
+    const body = document.createElement('div');
+    body.className = 'text';
+    if (who === 'you' || who === 'fern') {
+      const label = document.createElement('span');
+      label.className = 'who';
+      label.textContent = who === 'you' ? 'You:' : 'Fern:';
+      body.append(label);
+    }
+    body.append(document.createTextNode(text));
+    bubbleEl.replaceChildren(body);
+    bubbleEl.className = `show ${who}`;
+    bubbleShownAt = performance.now();
+    scheduleHide();
+  }
+
+  // -------------------------------------------------------------------------
+  // Click and drag. Less than 4 px of movement counts as a click.
+
+  let pointer;
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    canvas.setPointerCapture(e.pointerId);
+    pointer = { x: e.screenX, y: e.screenY, isDragging: false };
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!pointer) return;
+    const dx = e.screenX - pointer.x;
+    const dy = e.screenY - pointer.y;
+    if (!pointer.isDragging && Math.hypot(dx, dy) >= CLICK_SLOP_PX) {
+      pointer.isDragging = true;
+      window.avatar.dragStart();
+    }
+    if (pointer.isDragging) window.avatar.dragMove(dx, dy);
+  });
+  canvas.addEventListener('pointerup', () => {
+    if (!pointer) return;
+    if (pointer.isDragging) window.avatar.dragEnd();
+    else window.avatar.click();
+    pointer = undefined;
+  });
+  canvas.addEventListener('pointercancel', () => {
+    if (pointer?.isDragging) window.avatar.dragEnd();
+    pointer = undefined;
+  });
+
+  // -------------------------------------------------------------------------
+  // Voice buttons
+
+  /** Encodes mono float samples as a 16-bit PCM WAV file. */
+  function encodeWav(samples, rate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const text = (offset, s) => [...s].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+    text(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    text(8, 'WAVE');
+    text(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, rate, true);
+    view.setUint32(28, rate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    text(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    samples.forEach((s, i) => view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, s)) * 0x7fff, true));
+    return new Uint8Array(buffer);
+  }
+
+  // -------------------------------------------------------------------------
+  // Always-on listener. Cuts the mic stream into phrases by volume and sends
+  // each phrase to main. Audio stays in memory only.
+
+  const FRAME = 1024;                 // 64 ms at 16 kHz
+  const PRE_ROLL_FRAMES = 5;
+  // A phrase ends after this much silence. Main sends the value from the config.
+  let endSilenceMs = 1500;
+  const MIN_PHRASE_MS = 500;
+  const MAX_PHRASE_MS = 30000;
+  const ECHO_GUARD_MS = 600;
+  const earEl = document.getElementById('ear');
+  const DEVICE_SETTLE_MS = 800;
+  let ear;                            // { context, stream, node }
+  let isEarWanted = false;
+  let isEarStarting = false;
+  let restartTimer;
+  let lastSpeechEnd = 0;
+
+  function rms(samples) {
+    let sum = 0;
+    for (const s of samples) sum += s * s;
+    return Math.sqrt(sum / samples.length);
+  }
+
+  function concat(frames) {
+    const out = new Float32Array(frames.reduce((n, f) => n + f.length, 0));
+    let offset = 0;
+    for (const f of frames) {
+      out.set(f, offset);
+      offset += f.length;
+    }
+    return out;
+  }
+
+  async function startEar() {
+    if (ear || isEarStarting) return;
+    isEarStarting = true;
+    try {
+      await openEar();
+    } finally {
+      isEarStarting = false;
+    }
+  }
+
+  async function openEar() {
+    if (!(await window.avatar.askMic())) {
+      showBubble({ who: 'info', text: 'Microphone access is off, so I cannot listen for "Fern".' });
+      return;
+    }
+    // No deviceId: each open uses the mic that macOS has as default now.
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    if (!isEarWanted) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    // The track ends when its mic is unplugged.
+    stream.getAudioTracks().forEach((t) => t.addEventListener('ended', scheduleEarRestart));
+    const context = new AudioContext({ sampleRate: SAMPLE_RATE });
+    const source = context.createMediaStreamSource(stream);
+    // ScriptProcessor is old but needs no extra worklet file.
+    const node = context.createScriptProcessor(FRAME, 1, 1);
+    let noise = 0.01;
+    let phrase;                       // { frames, startedAt, lastLoudAt }
+    const preRoll = [];
+
+    node.onaudioprocess = (e) => {
+      const frame = new Float32Array(e.inputBuffer.getChannelData(0));
+      const level = rms(frame);
+      const now = performance.now();
+      // Ignore Fern's own voice.
+      const isBlocked = isSpeaking || now - lastSpeechEnd < ECHO_GUARD_MS;
+      const threshold = Math.max(0.015, noise * 3);
+      if (!phrase) {
+        noise = noise * 0.97 + level * 0.03;
+        preRoll.push(frame);
+        if (preRoll.length > PRE_ROLL_FRAMES) preRoll.shift();
+        if (!isBlocked && level > threshold) {
+          phrase = { frames: [...preRoll], startedAt: now, lastLoudAt: now };
+          earEl.classList.add('hearing');
+        }
+        return;
+      }
+      phrase.frames.push(frame);
+      if (level > threshold) phrase.lastLoudAt = now;
+      const isOver = now - phrase.lastLoudAt > endSilenceMs || now - phrase.startedAt > MAX_PHRASE_MS;
+      if (!isOver && !isBlocked) return;
+      const ms = phrase.lastLoudAt - phrase.startedAt;
+      const samples = concat(phrase.frames);
+      phrase = undefined;
+      earEl.classList.remove('hearing');
+      if (!isBlocked && ms >= MIN_PHRASE_MS) {
+        window.avatar.sendHeard(encodeWav(samples, SAMPLE_RATE), samples.length / SAMPLE_RATE);
+      }
+    };
+    source.connect(node);
+    node.connect(context.destination);
+    ear = { context, stream, node };
+    earEl.classList.add('on');
+  }
+
+  function stopEar() {
+    if (!ear) return;
+    ear.node.disconnect();
+    ear.stream.getTracks().forEach((t) => t.stop());
+    ear.context.close();
+    ear = undefined;
+    earEl.classList.remove('on', 'hearing');
+  }
+
+  function startEarSafely() {
+    startEar().catch((err) => showBubble({ who: 'info', text: `Cannot listen: ${err.message}` }));
+  }
+
+  /** Reopens the mic after a device change. Waits a moment, because macOS sends several events. */
+  function scheduleEarRestart() {
+    clearTimeout(restartTimer);
+    restartTimer = setTimeout(() => {
+      if (!isEarWanted) return;
+      stopEar();
+      startEarSafely();
+    }, DEVICE_SETTLE_MS);
+  }
+
+  navigator.mediaDevices.addEventListener('devicechange', scheduleEarRestart);
+
+  window.avatar.onListen(({ isOn, endSilenceMs: ms }) => {
+    if (Number.isFinite(ms) && ms >= 300) endSilenceMs = ms;
+    isEarWanted = isOn;
+    if (isOn) startEarSafely();
+    else stopEar();
+  });
+
+  // Mute buttons. Main owns the values (config), so tray changes show here too.
+  micButton.addEventListener('click', () => window.avatar.toggle('mic'));
+  voiceButton.addEventListener('click', () => window.avatar.toggle('voice'));
+  window.avatar.onToggles(({ isMicOn, isVoiceOn }) => {
+    micButton.classList.toggle('off', !isMicOn);
+    micButton.setAttribute('aria-pressed', String(!isMicOn));
+    micButton.title = isMicOn ? 'Mute the microphone' : 'Turn the microphone on';
+    voiceButton.classList.toggle('off', !isVoiceOn);
+    voiceButton.textContent = isVoiceOn ? '🔊' : '🔇';
+    voiceButton.setAttribute('aria-pressed', String(!isVoiceOn));
+    voiceButton.title = isVoiceOn ? "Mute Fern's voice" : "Turn Fern's voice on";
+    buttons.classList.toggle('muted', !isMicOn || !isVoiceOn);
+  });
+
+  // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // Click-through: the window takes the mouse only over Fern, the bubble, and the mini avatars.
+
+  let isInteractive = true;
+  document.addEventListener('mousemove', (e) => {
+    const hit = Boolean(e.target.closest?.('#stage, #bubble.show, .mini')) || Boolean(pointer);
+    if (hit === isInteractive) return;
+    isInteractive = hit;
+    window.avatar.setInteractive(hit);
+  });
+  document.addEventListener('mouseleave', () => {
+    if (pointer || !isInteractive) return;
+    isInteractive = false;
+    window.avatar.setInteractive(false);
+  });
+
+  window.avatar.onSetup(setup);
+  window.avatar.onState((name) => {
+    if (!name || name === stateName) return;
+    stateName = name;
+    stateStart = performance.now();
+  });
+  window.avatar.onBubble(showBubble);
+  window.avatar.onSpeaking((value) => {
+    isSpeaking = value;
+    if (value) {
+      talkStart = performance.now();
+      clearTimeout(hideTimer);
+    } else {
+      lastSpeechEnd = performance.now();
+      scheduleHide();
+    }
+  });
+</script>
+</body>
+</html>
