@@ -159,5 +159,63 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Delivered prompts
+
+  const ENVELOPE = [
+    '#########',
+    '##.....##',
+    '#.#...#.#',
+    '#..#.#..#',
+    '#...#...#',
+    '#.......#',
+    '#########',
+  ];
+  let envelopeCanvas;
+
+  /** A pixel envelope with an outline, drawn once. */
+  function envelope() {
+    if (envelopeCanvas) return envelopeCanvas;
+    envelopeCanvas = document.createElement('canvas');
+    envelopeCanvas.width = ENVELOPE[0].length + 2;
+    envelopeCanvas.height = ENVELOPE.length + 2;
+    const c = envelopeCanvas.getContext('2d');
+    c.fillStyle = COLORS.outline;
+    c.fillRect(0, 0, envelopeCanvas.width, envelopeCanvas.height);
+    ENVELOPE.forEach((row, y) => [...row].forEach((ch, x) => {
+      c.fillStyle = ch === '#' ? '#C9CEDB' : COLORS.white;
+      c.fillRect(x + 1, y + 1, 1, 1);
+    }));
+    return envelopeCanvas;
+  }
+
+  /** Drops an envelope into the avatar with this key. Tries again once if the avatar is not there yet. */
+  function deliver(key, isRetry = false) {
+    const item = items.get(key);
+    if (!item) {
+      if (!isRetry) setTimeout(() => deliver(key, true), 400);
+      return;
+    }
+    const icon = document.createElement('canvas');
+    icon.className = 'envelope';
+    icon.width = (ENVELOPE[0].length + 2) * SCALE;
+    icon.height = (ENVELOPE.length + 2) * SCALE;
+    const c = icon.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    c.drawImage(envelope(), 0, 0, icon.width, icon.height);
+    // The drop ends in the middle of the sprite, under the label box.
+    icon.style.setProperty('--drop', `${item.el.offsetHeight - (H + 2) * SCALE * 0.6}px`);
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) icon.style.animation = 'none';
+    const done = () => {
+      icon.remove();
+      item.el.classList.add('got-mail');
+      setTimeout(() => item.el.classList.remove('got-mail'), 300);
+    };
+    icon.addEventListener('animationend', done);
+    if (icon.style.animation === 'none') setTimeout(done, 800);
+    item.el.append(icon);
+  }
+
   window.avatar.onCrowd(update);
+  window.avatar.onDeliver(({ key }) => deliver(key));
 })();

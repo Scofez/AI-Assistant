@@ -544,7 +544,9 @@ async function onHookEvent(raw) {
       break;
     }
     case 'UserPromptSubmit':
-      if (typeof raw.prompt === 'string' && raw.prompt.trim()) bubble('you', sentences(raw.prompt, 2, 160));
+      // No text over Fern: an envelope drops into the session's avatar instead.
+      // The mini avatar may come in the next crowd update, so the page waits a moment for it.
+      if (typeof raw.prompt === 'string' && raw.prompt.trim()) send('crowd:deliver', { key: `s:${sessionId}` });
       break;
     case 'PreToolUse':
       bubble('info', raw.tool_name ? `Using ${raw.tool_name}` : 'Working…');
@@ -853,7 +855,9 @@ function createPanel() {
     minimizable: true,
     maximizable: true,
     fullscreenable: false,
-    alwaysOnTop: true,
+    // A normal window: it comes to the front when you open it, and other windows
+    // (for example a Terminal tab that Fern brings forward) can go above it.
+    alwaysOnTop: false,
     minWidth: 420,
     minHeight: 240,
     backgroundColor: '#17161F',
@@ -1149,7 +1153,11 @@ function requestApproval({ caller, reason, detail }) {
     const question = `${label} wants to ${reason}.`;
     send('approval', { id, text: question, detail });
     sendPanel('panel:approval', { id, text: question, detail, tab });
-    if (panel && !panel.isDestroyed() && !panel.isVisible()) panel.showInactive();
+    // A confirmation must be seen, so the panel goes to the top, without taking the keyboard focus.
+    if (panel && !panel.isDestroyed()) {
+      if (!panel.isVisible()) panel.showInactive();
+      panel.moveTop();
+    }
     state.handle('Notification', stateKey);
     speech.say(`I need your OK first. ${question}`, { kind: 'attention', sessionId: `approval:${id}` });
   });
@@ -1214,6 +1222,8 @@ function registerIpc() {
     state.clearAttention();
     spawn('open', ['-a', config.get().terminalApp], { stdio: 'ignore' })
       .on('error', (err) => console.warn(`[click] ${err.message}`));
+    showPanel();
+    sendPanel('panel:select', 'fern');
   });
   ipcMain.handle('voice:mic', async () => {
     if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') return true;

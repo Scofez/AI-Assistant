@@ -96,6 +96,7 @@ When Fern starts and every 6 hours, she compares `claude --version` with the new
 
 Left of Fern, a small avatar stands for each open Claude Code session. The box above it shows the session title (your `/rename` name, or Claude's automatic title) and the folder that the session started in. The box border shows the state: orange needs you, blue is working, mint is done.
 
+- **Your prompts** to a session do not show over Fern. A small envelope drops into that session's avatar instead, as if the prompt was delivered. Notices from sessions ("… needs you", "Claude finished in …") still show in Fern's bubble.
 - **Subagents** of a session show as clones in that session's colors, with their number ("Agent #1").
 - **Fern's jobs** show as small Fern clones with their number ("Fern #1").
 - **Fern's own subagents** (her Agent or Task tool calls) show as Fern clones next to her, with their description ("Fern agent #1" when there is none). A clone goes away when its agent ends or when Fern's `claude -p` process stops. A click shows Fern's chat in the panel.
@@ -124,7 +125,7 @@ Background subagents end with the `SubagentStop` hook. Run `npm run install-hook
 
    - **`/resume`:** lists your earlier chats with Fern, newest first, like Claude Code's `/resume`. Each row shows the first question, the number of messages, and the age. Use ↑ ↓ and Enter, or click. Fern then continues that chat, and her tab shows its messages (up to the last 200 lines). The chats are the Claude Code sessions in `~/.claude/projects/-Users-<you>--claude-avatar-workspace/`. Chats from before Fern moved to her workspace folder are not listed, because `--resume` finds only sessions of the current folder. Typed replies are not spoken unless `speakTypedReplies` is `true`.
 
-   - **Window buttons:** the usual macOS buttons. Red (or Esc, or Cmd+Shift+K) hides the panel and keeps its tabs. Yellow minimizes. Green zooms the panel to fill the screen (it stays in the same Space). Fern always stays on top of the panel.
+   - **Window buttons:** the usual macOS buttons. Red (or Esc, or Cmd+Shift+K) hides the panel and keeps its tabs. Yellow minimizes. Green zooms the panel to fill the screen (it stays in the same Space). The panel is a normal window: other windows, for example a Terminal tab that you open from a session avatar, can go above it. A confirmation brings it to the top. Fern always stays on top of it.
    - **Tabs:** "Fern · main session" is your chat with Fern. Each job that Fern starts gets its own tab ("Fern #1 · project"). It logs the job live, like a Claude Code session: `⏺` for Claude's text and tool calls, `⎿` for tool results. The dot shows the state: blue running, mint done, orange failed or waiting for your OK. A bold tab has new lines. Cmd+1 to Cmd+9 switch tabs. A tab of a finished job can be closed with ×.
    - A confirmation from a job shows in that job's tab. A click on a Fern clone next to the avatar opens its tab.
    - Each tab keeps its last 1500 lines in memory only. Tool results show their first 8 lines.

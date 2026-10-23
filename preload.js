@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('avatar', {
   onSpeaking: listen('speaking'),
   onListen: listen('listen'),
   onCrowd: listen('crowd'),
+  onDeliver: listen('crowd:deliver'),
   clickMini: (key) => ipcRenderer.send('crowd:click', key),
   setInteractive: (isInteractive) => ipcRenderer.send('mouse:interactive', isInteractive),
   onApproval: listen('approval'),
