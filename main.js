@@ -13,9 +13,12 @@ const { lastAssistantText, sentences, sessionTitle } = require('./lib/transcript
 const { classifyPhrase, createAssistant, summarizeWithClaude, transcribe } = require('./lib/assistant');
 const voiceprint = require('./lib/voiceprint');
 const kokoro = require('./lib/kokoro');
-const { createJobs, describeToolCall } = require('./lib/jobs');
+const { createJobs } = require('./lib/jobs');
+const { describeToolCall } = require('./lib/stream-log');
 const { createFernTools } = require('./lib/fern-tools');
 const fernHistory = require('./lib/fern-history');
+const { runningSessions } = require('./lib/session-registry');
+const updates = require('./lib/updates');
 const { MCP_CONFIG_FILE, newToken, writeMcpConfig, createMcpHandler } = require('./lib/mcp');
 const guard = require('./lib/guard');
 const terminal = require('./lib/terminal');
@@ -28,7 +31,7 @@ const MARGIN = 24;
 // Fern's own activity drives the animation, but she is not a Claude Code session.
 // This key is never listed to her as one.
 const FERN_SELF = '__fern__';
-// Mini avatars left of Fern: one per Claude session, subagent, and Fern job.
+// Mini avatars left of Fern: one per Claude session, subagent, Fern job, and Fern subagent.
 const MINI_SLOT_WIDTH = 92;
 const MAX_MINIS = 8;
 const CROWD_THROTTLE_MS = 150;
@@ -36,6 +39,39 @@ const PRUNE_INTERVAL_MS = 30 * 1000;
 const STALE_AGENT_MS = 60 * 60 * 1000;
 const FINISHED_JOB_VISIBLE_MS = 10 * 1000;
 const AGENT_TOOLS = new Set(['Task', 'Agent']);
+const UPDATE_CHECK_FIRST_MS = 15 * 1000;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const COMMAND_PROBE_DELAY_MS = 3 * 1000;
+const MODEL_NAME = /^(sonnet|opus|haiku|fable|best)(\[1m\])?$|^claude-[a-z0-9.-]+$/;
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+// Fern's own commands. They come first in the autocomplete list.
+const FERN_COMMANDS = {
+  help: 'Show the commands',
+  resume: 'Switch to an earlier Fern chat',
+  clear: 'Start a new chat with Fern',
+  new: 'Start a new chat with Fern',
+  model: "Show or set Fern's model (Fern only)",
+  effort: "Show or set Fern's effort (Fern only)",
+  sessions: 'Open Claude Code sessions in your terminals',
+  jobs: "Fern's jobs",
+  cancel: 'Stop a job: /cancel <id>',
+  allow: 'Allow the newest confirmation',
+  deny: 'Deny the newest confirmation',
+  version: 'Claude Code versions (installed, newest, sessions)',
+  update: 'Update Claude Code',
+};
+// Claude commands that only read, or that change only Fern's chat. Fern sends them to her Claude session.
+// Others are left out: they change your global settings or need the interactive terminal.
+const CLAUDE_COMMANDS = {
+  usage: 'Plan usage limits',
+  context: "Context use of Fern's chat",
+  compact: "Compact Fern's chat",
+  mcp: 'MCP servers',
+  insights: 'Claude Code insights',
+  recap: 'Recap of the chat',
+  'list-agents': 'Agents that are available',
+};
 const PANEL_WIDTH = 640;
 const PANEL_HEIGHT = 380;
 const STATE_BY_EVENT = {
@@ -90,6 +126,10 @@ function reloadWhenGone(window, name) {
   });
 }
 let pendingAsks = 0;
+// From the init message of Fern's claude -p runs: { slashCommands, skills, model, version }.
+let claudeInfo = { slashCommands: [], skills: [] };
+// From the update check: { installed, latest, announced }.
+const updateInfo = {};
 const setPanelBusy = (delta) => {
   pendingAsks += delta;
   sendPanel('panel:busy', pendingAsks > 0);
@@ -102,6 +142,9 @@ const tell = (who, text) => {
 
 // Live Claude Code sessions, from hook events. Memory only.
 const sessions = new Map();
+// Fern's own live subagents, from her claude -p stream, because her hooks are off. Memory only.
+const fernAgents = new Map();
+let lastFernAgentNumber = 0;
 
 const state = createStateMachine((name) => send('state', name));
 const speech = createSpeech({
@@ -315,6 +358,18 @@ function trackAgents(entry, event, raw) {
   }
 }
 
+/** Adds a clone for a subagent that Fern started. `id` is its tool_use id. */
+function addFernAgent(id, description) {
+  fernAgents.set(id, { id, number: ++lastFernAgentNumber, description });
+  scheduleCrowd();
+}
+
+/** Removes the clone when Fern's subagent ends. */
+function removeFernAgent(id) {
+  fernAgents.delete(id);
+  scheduleCrowd();
+}
+
 /** Keeps the session list that Fern reads through her list_sessions tool and that the mini avatars show. */
 function trackSession(event, sessionId, raw, project) {
   if (event === 'SessionEnd') {
@@ -354,7 +409,7 @@ function shortPlace(cwd) {
   return parts.length > 3 ? `…/${parts.slice(-2).join('/')}` : rel;
 }
 
-/** Left to right: each session and its subagent clones, then Fern's job clones next to Fern. */
+/** Left to right: each session and its subagent clones, then Fern's job and subagent clones next to Fern. */
 function buildCrowd() {
   const minis = [];
   const live = [...sessions.values()].sort((a, b) => a.startedAt - b.startedAt);
@@ -370,6 +425,10 @@ function buildCrowd() {
     if (j.status !== 'running' && now - j.endedAt > FINISHED_JOB_VISIBLE_MS) continue;
     const jobState = { running: 'working', done: 'done' }[j.status] ?? 'attention';
     minis.push({ key: `j:${j.id}`, kind: 'job', title: `Fern #${j.number}`, place: j.project, state: jobState, seed: 'fern', number: j.number });
+  }
+  for (const a of fernAgents.values()) {
+    const name = `Fern agent #${a.number}`;
+    minis.push({ key: `f:${a.id}`, kind: 'fernAgent', title: a.description || name, place: name, state: 'working', seed: 'fern', number: a.number });
   }
   if (minis.length <= MAX_MINIS) return minis;
   const hidden = minis.length - (MAX_MINIS - 1);
@@ -391,6 +450,39 @@ function scheduleCrowd() {
   }, CROWD_THROTTLE_MS);
 }
 
+/**
+ * Adds the Claude Code sessions that already run in a terminal, from Claude's own
+ * registry, so they show before they send a hook. Also reads their version.
+ */
+async function discoverSessions() {
+  const now = Date.now();
+  for (const r of await runningSessions()) {
+    // A /clear or /resume inside a session keeps the process but changes the session id.
+    for (const [id, s] of sessions) if (s.pid === r.pid && id !== r.sessionId) sessions.delete(id);
+    const entry = sessions.get(r.sessionId);
+    const registryState = r.status === 'busy' ? 'working' : 'idle';
+    if (entry) {
+      entry.version = r.version;
+      entry.resumeCwd = r.cwd;
+      // Hooks give the better state. The registry is used only when hooks are quiet.
+      if (now - entry.updatedAt > 60 * 1000 && entry.state !== 'attention') entry.state = registryState;
+      continue;
+    }
+    const added = {
+      id: r.sessionId, pid: r.pid, cwd: r.cwd, resumeCwd: r.cwd, project: path.basename(r.cwd ?? '') || 'Claude',
+      version: r.version, name: r.name, state: registryState, startedAt: now, updatedAt: now,
+      transcriptPath: path.join(fernHistory.projectDir(r.cwd ?? ''), `${r.sessionId}.jsonl`),
+    };
+    sessions.set(r.sessionId, added);
+    terminal.resolveSessionProcess(r.pid).then((found) => {
+      if (found) added.tty = found.tty;
+      scheduleCrowd();
+    });
+    refreshSessionInfo(added, 'SessionStart');
+  }
+  scheduleCrowd();
+}
+
 /** Removes sessions whose claude process ended without SessionEnd, and old agents. */
 function pruneSessions() {
   const now = Date.now();
@@ -404,11 +496,16 @@ function pruneSessions() {
 /**
  * A click on a session (or its agent) brings its terminal tab to the front.
  * When the session is closed, it opens a new terminal that resumes it.
- * A click on a Fern job shows it in the panel.
+ * A click on a Fern job shows it in the panel. A click on a Fern subagent shows Fern's chat.
  */
 async function onMiniClick(key) {
   const { terminalApp } = config.get();
   const [kind, id] = key.split(':');
+  if (kind === 'f') {
+    showPanel();
+    sendPanel('panel:select', 'fern');
+    return;
+  }
   if (kind === 'j') {
     const job = jobs.get(id);
     if (!job) return;
@@ -427,7 +524,8 @@ async function onMiniClick(key) {
     return;
   }
   if (!s.cwd) return;
-  await terminal.openSession(terminalApp, s.cwd, s.id);
+  // Claude finds a session only from the folder where it started.
+  await terminal.openSession(terminalApp, s.resumeCwd ?? s.cwd, s.id);
 }
 
 async function onHookEvent(raw) {
@@ -536,28 +634,36 @@ function startServer() {
  * Sends text to Fern's claude -p chat, then shows the reply.
  * Voice questions get a spoken reply. Typed ones only when speakTypedReplies is on.
  */
-async function askFern(text, source) {
+async function askFern(text, source, { isCommand = false } = {}) {
   state.handle('UserPromptSubmit', FERN_SELF);
   setPanelBusy(1);
   const isTyped = source === 'panel';
-  // The tag tells Fern which reply style to use. See FERN_PROMPT.
-  const tagged = `${isTyped ? '[Terminal]' : '[Spoken]'} ${text}`;
+  // The tag tells Fern which reply style to use. See FERN_PROMPT. A slash command goes as it is.
+  const prompt = text.startsWith('/') ? text : `${isTyped ? '[Terminal]' : '[Spoken]'} ${text}`;
   try {
-    const reply = await assistant.ask(tagged, (tool, input) => {
-      state.handle('PreToolUse', FERN_SELF);
-      panelLine('tool', describeToolCall(tool, input));
+    const reply = await assistant.ask(prompt, {
+      isCommand,
+      // Each step shows in the panel while it happens, like in Claude Code.
+      onLog: (who, line) => {
+        if (who === 'tool') state.handle('PreToolUse', FERN_SELF);
+        panelLine(who === 'assistant' ? 'fern' : who, line);
+      },
+      onInit: setClaudeInfo,
+      onAgentStart: addFernAgent,
+      onAgentEnd: removeFernAgent,
     });
+    if (!reply.hasStreamedText && reply.text) panelLine('fern', reply.text);
     // A technical reply keeps its Markdown in the panel. The bubble and the voice get a short plain line.
-    const short = isTyped ? sentences(reply, 2, 200) : reply;
+    const short = isTyped || isCommand ? sentences(reply.text, 2, 200) : reply.text;
     state.handle('Stop', FERN_SELF);
-    bubble('fern', short);
-    panelLine('fern', reply);
+    if (short) bubble('fern', short);
     if (!isTyped || config.get().speakTypedReplies) speech.say(short, { kind: 'reply', sessionId: FERN_SELF });
   } catch (err) {
     state.handle('SessionEnd', FERN_SELF);
     tell('info', `claude -p failed: ${err.message}`);
   } finally {
     setPanelBusy(-1);
+    sendStatus();
   }
 }
 
@@ -759,6 +865,10 @@ function createPanel() {
   });
   panel.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   reloadWhenGone(panel, 'panel');
+  panel.webContents.on('did-finish-load', () => {
+    sendPanel('panel:commands', commandList());
+    sendStatus();
+  });
   panel.loadFile('panel.html');
   // The red button hides the panel, so the tabs and their logs stay.
   panel.on('close', (e) => {
@@ -787,8 +897,15 @@ function togglePanel() {
 }
 
 function sessionLines() {
-  const lines = [...sessions.values()].map((s) => `${s.project.padEnd(20)} ${String(s.state).padEnd(10)} ${s.lastSummary ?? ''}`);
-  return lines.length ? lines.join('\n') : 'No Claude Code sessions seen yet.';
+  const rows = [...sessions.values()].map((s) => [
+    s.id.slice(0, 8), (s.title || s.project).slice(0, 32), s.state, s.version ?? '?', shortPlace(s.cwd), s.tty ? 'terminal' : '',
+  ]);
+  const jobRows = jobs.list().filter((j) => j.status === 'running').map((j) => [j.id, `Fern #${j.number} ${j.title}`.slice(0, 32), 'working', '', shortPlace(j.cwd), 'job']);
+  const all = [...rows, ...jobRows];
+  if (!all.length) return 'No Claude Code sessions or jobs are running.';
+  const header = ['id', 'title', 'state', 'version', 'folder', ''];
+  const widths = header.map((h, i) => Math.max(h.length, ...all.map((r) => String(r[i]).length)));
+  return [header, ...all].map((r) => r.map((c, i) => String(c).padEnd(widths[i])).join('  ').trimEnd()).join('\n');
 }
 
 function jobLines() {
@@ -797,11 +914,68 @@ function jobLines() {
 }
 
 /** Panel input. Lines that start with "/" are local commands and do not reach Claude. */
+/** Commands for the panel's autocomplete: Fern's own, then Claude's, then skills. */
+function commandList() {
+  const available = new Set(claudeInfo.slashCommands);
+  const skills = new Set(claudeInfo.skills);
+  return [
+    ...Object.entries(FERN_COMMANDS).map(([name, description]) => ({ name, description, kind: 'fern' })),
+    ...Object.entries(CLAUDE_COMMANDS)
+      .filter(([name]) => available.has(name) || !available.size)
+      .map(([name, description]) => ({ name, description, kind: 'claude' })),
+    ...[...skills].sort().map((name) => ({ name, description: 'Skill', kind: 'skill' })),
+  ];
+}
+
+function setClaudeInfo(info) {
+  const isNewList = JSON.stringify(info.slashCommands) !== JSON.stringify(claudeInfo.slashCommands);
+  claudeInfo = info;
+  if (isNewList) sendPanel('panel:commands', commandList());
+  sendStatus();
+}
+
+/** The line under the panel input: model, effort, chat, Claude Code version. */
+function sendStatus() {
+  const { fernModel, fernEffort } = config.get();
+  const chat = assistant.currentSession();
+  const parts = [
+    `model ${fernModel || claudeInfo.model || 'default'}`,
+    `effort ${fernEffort || 'default'}`,
+    chat ? `chat ${chat.slice(0, 8)}` : 'new chat',
+  ];
+  if (updateInfo.installed) {
+    const isOld = updateInfo.latest && updates.compareVersions(updateInfo.latest, updateInfo.installed) > 0;
+    parts.push(isOld ? `Claude Code ${updateInfo.installed} · ${updateInfo.latest} available, type /update` : `Claude Code ${updateInfo.installed}`);
+  }
+  sendPanel('panel:status', parts.join(' · '));
+}
+
+function helpText() {
+  const rows = commandList().filter((c) => c.kind !== 'skill').map((c) => `/${c.name.padEnd(12)} ${c.description}`);
+  const skills = commandList().filter((c) => c.kind === 'skill').map((c) => `/${c.name}`);
+  return [...rows, '', `Skills: ${skills.join(' ') || 'none'}`, '', 'Esc or Cmd+Shift+K: hide'].join('\n');
+}
+
+function setFernOption(key, value, isValid, label) {
+  if (!value) return panelLine('info', `Fern's ${label}: ${config.get()[key] || 'default'}`);
+  if (value === 'default') {
+    config.update({ [key]: '' });
+  } else if (!isValid(value)) {
+    return panelLine('info', `Unknown ${label} "${value}".`);
+  } else {
+    config.update({ [key]: value });
+  }
+  panelLine('info', `Fern's ${label} is now ${config.get()[key] || 'default'}. This does not change your other Claude sessions.`);
+  return sendStatus();
+}
+
+/** Panel input. Fern's commands run here. Claude commands and skills go to Fern's Claude session. */
 function handlePanelInput(text) {
   const [command, ...rest] = text.split(/\s+/);
+  const name = command.startsWith('/') ? command.slice(1) : '';
   switch (command) {
     case '/help':
-      return panelLine('info', '/resume  switch to an earlier Fern chat\n/sessions  list sessions\n/jobs  list jobs\n/cancel <id>  stop a job\n/allow [id], /deny [id]  answer a confirmation\n/new  new chat with Fern\n/clear  clear the screen\nEsc or Cmd+Shift+K  hide');
+      return panelLine('info', helpText());
     case '/sessions':
       return panelLine('info', sessionLines());
     case '/jobs':
@@ -813,11 +987,21 @@ function handlePanelInput(text) {
         return panelLine('info', err.message);
       }
     case '/new':
+    case '/clear':
       assistant.reset();
       sendPanel('panel:history', { lines: [] });
-      return panelLine('info', 'New chat started.');
+      panelLine('info', 'New chat started.');
+      return sendStatus();
     case '/resume':
       return showResumePicker();
+    case '/model':
+      return setFernOption('fernModel', rest[0], (v) => MODEL_NAME.test(v), 'model');
+    case '/effort':
+      return setFernOption('fernEffort', rest[0], (v) => EFFORT_LEVELS.includes(v), 'effort');
+    case '/version':
+      return showVersions();
+    case '/update':
+      return updateClaude();
     case '/allow':
     case '/deny': {
       const id = rest[0] ?? [...approvals.keys()].at(-1);
@@ -825,9 +1009,24 @@ function handlePanelInput(text) {
       return answerApproval(id, command === '/allow');
     }
     default:
-      if (command.startsWith('/')) return panelLine('info', `Unknown command ${command}. Type /help.`);
-      tell('you', text);
-      return askFern(text, 'panel');
+      if (!name) {
+        tell('you', text);
+        return askFern(text, 'panel');
+      }
+      if (CLAUDE_COMMANDS[name]) {
+        // /mcp with words after it can change your MCP settings, so only the list runs.
+        if (name === 'mcp' && rest.length) return panelLine('info', 'Fern runs only /mcp (the list). Change MCP servers in a Claude Code session.');
+        tell('you', text);
+        return askFern(text, 'panel', { isCommand: true });
+      }
+      if (claudeInfo.skills.includes(name)) {
+        tell('you', text);
+        return askFern(text, 'panel');
+      }
+      if (claudeInfo.slashCommands.includes(name)) {
+        return panelLine('info', `/${name} is a Claude Code command that Fern does not run: it changes your global settings or needs the interactive terminal. Run it in a Claude Code session.`);
+      }
+      return panelLine('info', `Unknown command ${command}. Type /help.`);
   }
 }
 
@@ -844,6 +1043,57 @@ async function resumeChat(id) {
   assistant.useSession(id);
   sendPanel('panel:history', { lines });
   panelLine('info', `Resumed chat ${id.slice(0, 8)}. Your next question continues it.`);
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code updates
+
+/** Open sessions that run an older Claude Code than the installed one. */
+function outdatedSessions() {
+  if (!updateInfo.installed) return [];
+  return [...sessions.values()].filter((s) => s.version && updates.compareVersions(s.version, updateInfo.installed) < 0);
+}
+
+/** Compares the installed version with the newest one. Suggests /update once per new version. */
+async function checkForUpdate() {
+  if (!config.get().checkClaudeUpdates) return;
+  const [installed, latest] = await Promise.all([updates.installedVersion(config.get().claudePath), updates.latestVersion()]);
+  if (installed) updateInfo.installed = installed;
+  if (latest) updateInfo.latest = latest;
+  sendStatus();
+  if (!installed || !latest || updates.compareVersions(latest, installed) <= 0 || updateInfo.announced === latest) return;
+  updateInfo.announced = latest;
+  tell('fern', `Claude Code ${latest} is out. You have ${installed}. Type /update in my terminal and I will install it.`);
+  speech.say('A Claude Code update is available.', { kind: 'info', sessionId: 'update' });
+}
+
+function showVersions() {
+  const lines = [
+    `installed  ${updateInfo.installed ?? 'unknown'}`,
+    `newest     ${updateInfo.latest ?? 'unknown (no network?)'}`,
+    ...[...sessions.values()].map((s) => `session    ${(s.version ?? '?').padEnd(10)} ${s.title || s.project}`),
+  ];
+  const old = outdatedSessions();
+  if (old.length) lines.push('', `${old.length} open session(s) run an older version. Restart them to use ${updateInfo.installed}.`);
+  panelLine('info', lines.join('\n'));
+}
+
+/** /update: runs `claude update` when a newer version exists, and shows its output in the panel. */
+async function updateClaude() {
+  await checkForUpdate();
+  const { installed, latest } = updateInfo;
+  if (installed && latest && updates.compareVersions(latest, installed) <= 0) {
+    return panelLine('info', `Claude Code ${installed} is the newest version.`);
+  }
+  panelLine('tool', 'Bash(claude update)');
+  setPanelBusy(1);
+  const code = await updates.runUpdate(config.get().claudePath, (line) => panelLine('result', line));
+  setPanelBusy(-1);
+  updateInfo.installed = await updates.installedVersion(config.get().claudePath);
+  sendStatus();
+  if (code !== 0) return tell('info', `claude update stopped with code ${code}. See the panel.`);
+  const old = outdatedSessions();
+  tell('fern', `Claude Code is now ${updateInfo.installed}.${old.length ? ` Restart ${old.length} open session(s) to use it: ${old.map((s) => s.title || s.project).join(', ')}.` : ''}`);
 }
 
 function registerShortcut(accelerator) {
@@ -1100,7 +1350,17 @@ if (!app.requestSingleInstanceLock()) {
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(permission === 'media'));
     registerIpc();
     createWindow();
-    setInterval(pruneSessions, PRUNE_INTERVAL_MS);
+    setInterval(() => {
+      pruneSessions();
+      discoverSessions().catch((err) => console.warn(`[sessions] ${err.message}`));
+    }, PRUNE_INTERVAL_MS);
+    discoverSessions().catch((err) => console.warn(`[sessions] ${err.message}`));
+    setTimeout(() => checkForUpdate().catch(() => {}), UPDATE_CHECK_FIRST_MS);
+    setInterval(() => checkForUpdate().catch(() => {}), UPDATE_CHECK_INTERVAL_MS);
+    // A local command costs nothing and returns the list of commands and skills for autocomplete.
+    setTimeout(() => {
+      assistant.ask('/context', { isCommand: true, onInit: setClaudeInfo }).catch(() => {});
+    }, COMMAND_PROBE_DELAY_MS);
     createPanel();
     createTray();
     startServer();

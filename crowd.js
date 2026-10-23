@@ -97,7 +97,8 @@
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, item.canvas.width, item.canvas.height);
     if (data.kind === 'more') return;
-    ctx.drawImage(sprite(paletteFor(data.seed), data.state, f, data.kind === 'job'), 0, 0, (W + 2) * SCALE, (H + 2) * SCALE);
+    const isFernClone = data.kind === 'job' || data.kind === 'fernAgent';
+    ctx.drawImage(sprite(paletteFor(data.seed), data.state, f, isFernClone), 0, 0, (W + 2) * SCALE, (H + 2) * SCALE);
   }
 
   function create(data) {
@@ -141,7 +142,8 @@
       }
       item.data = data;
       item.el.setAttribute('aria-label', `${data.title}, ${data.place}, ${data.state}`);
-      item.el.title = `${data.title}\n${data.place}\n${data.kind === 'job' ? 'Click to see the job' : 'Click to open its terminal'}`;
+      const hint = { job: 'Click to see the job', fernAgent: "Click to see Fern's chat" }[data.kind] ?? 'Click to open its terminal';
+      item.el.title = `${data.title}\n${data.place}\n${hint}`;
     });
     const isBusy = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
       && list.some((d) => ANIMATED.has(d.state));

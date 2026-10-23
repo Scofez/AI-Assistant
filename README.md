@@ -88,23 +88,39 @@ The rules are best effort. A command can hide what it does. Read the command in 
 
 Your global `defaultMode: "auto"` does not apply to Fern or jobs: they always set `manual`. Do not set `jobPermissionMode` to `"bypassPermissions"`: that turns off all checks for jobs.
 
+### Claude Code updates
+
+When Fern starts and every 6 hours, she compares `claude --version` with the newest version on the npm registry (`@anthropic-ai/claude-code`). When a newer one exists, she tells you once in the bubble and the panel, and the status line shows it. Type `/update` in the panel: she runs `claude update` and shows its output. After that, she lists the open sessions that still run the older version, so you can restart them. `/version` shows the installed and newest versions and the version of each open session. Turn the check off with `"checkClaudeUpdates": false`. The check sends no data about you; it only downloads the version number.
+
 ### Session avatars
 
 Left of Fern, a small avatar stands for each open Claude Code session. The box above it shows the session title (your `/rename` name, or Claude's automatic title) and the folder that the session started in. The box border shows the state: orange needs you, blue is working, mint is done.
 
 - **Subagents** of a session show as clones in that session's colors, with their number ("Agent #1").
 - **Fern's jobs** show as small Fern clones with their number ("Fern #1").
+- **Fern's own subagents** (her Agent or Task tool calls) show as Fern clones next to her, with their description ("Fern agent #1" when there is none). A clone goes away when its agent ends or when Fern's `claude -p` process stops. A click shows Fern's chat in the panel.
 - **Click a session or its agent:** its Terminal tab comes to the front. When the session is closed, a new Terminal window opens with `claude --resume <id>` in its folder. The first click asks for the Automation permission for Terminal. Terminal and iTerm2 are supported.
 - **Click a Fern clone:** the panel shows the job.
 
-`hooks/forward.sh` sends the hook's parent process id, so the app can find the session's terminal. The app asks `ps` once per session. Every 30 s it removes sessions whose `claude` process ended. At most 8 avatars show; the rest are counted in a "+N more" box. The empty parts of the window let mouse clicks through to the desktop.
+Fern finds the sessions that already run when she starts: Claude Code keeps a registry of its running interactive sessions in `~/.claude/sessions/<pid>.json` (session id, folder, version, busy or idle). Fern reads it at start and every 30 s, so a session shows before it sends a hook. She reads only the `<pid>.json` files, never the `.key` files next to them. `hooks/forward.sh` also sends the hook's parent process id, so the app can find the session's terminal. When a `/clear` or `/resume` inside a session changes its id, the old avatar goes away. At most 8 avatars show; the rest are counted in a "+N more" box. The empty parts of the window let mouse clicks through to the desktop.
 
 Background subagents end with the `SubagentStop` hook. Run `npm run install-hooks` again after an update to add it.
 
 ### Two ways to talk to Fern
 
 1. **Voice:** say "Fern, …" (below).
-2. **Keyboard:** press **Cmd+Shift+K**. A terminal-style panel opens. Type and press Return. Up and Down keys show your earlier lines. Local commands: `/resume`, `/sessions`, `/jobs`, `/cancel <id>`, `/allow`, `/deny`, `/new`, `/clear`, `/help`.
+2. **Keyboard:** press **Cmd+Shift+K**. A panel opens that looks like Claude Code: your prompt on a grey band after `>`, Fern's replies and tool calls after `⏺`, tool results after `⎿`, all shown live while she works. Replies show Markdown (bold, code, lists, code blocks, tables as aligned text). The output of `/usage` and `/context` gets bars, like in the interactive terminal: each limit ("Current session: 60% used") as a bar that turns amber from 50% and orange from 80%, each "contributing" line as a small bar, and a bar column for tables with percentages. Up and Down keys show your earlier lines. Under the input, a status line shows Fern's model, effort, chat, and the Claude Code version. Typed replies are not spoken unless `speakTypedReplies` is `true`.
+
+   - **Commands with autocomplete:** type `/` and a menu shows the commands that match. ↑ ↓ to choose, Tab to complete, Enter to run, Esc to close. There are 3 kinds:
+
+     | Kind | Commands | What happens |
+     |---|---|---|
+     | Fern | `/help`, `/resume`, `/clear` (`/new`), `/model [name]`, `/effort [level]`, `/sessions`, `/jobs`, `/cancel <id>`, `/allow`, `/deny`, `/version`, `/update` | Fern runs them herself. `/model` and `/effort` change only Fern (`fernModel`, `fernEffort` in the config), never your other Claude sessions. `/model default` goes back to the default. |
+     | Claude | `/usage`, `/context`, `/compact`, `/mcp`, `/insights`, `/recap`, `/list-agents` | Sent to Fern's Claude session. Most run locally at no cost. `/mcp` runs only as a list. |
+     | Skills | every skill that Claude reports, for example `/code-review` | Sent to Fern as a prompt, so the skill runs in her chat. |
+
+     The list comes from Claude itself (the `init` message of Fern's `claude -p` runs), so new commands and skills show by themselves. Claude commands that change your global settings or need the interactive terminal (for example `/config`, `/theme`, `/login`) are not run; Fern says so.
+   - **`/sessions`** shows a table of the Claude Code sessions in your terminals and Fern's running jobs: id, title, state, Claude version, folder.
 
    - **`/resume`:** lists your earlier chats with Fern, newest first, like Claude Code's `/resume`. Each row shows the first question, the number of messages, and the age. Use ↑ ↓ and Enter, or click. Fern then continues that chat, and her tab shows its messages (up to the last 200 lines). The chats are the Claude Code sessions in `~/.claude/projects/-Users-<you>--claude-avatar-workspace/`. Chats from before Fern moved to her workspace folder are not listed, because `--resume` finds only sessions of the current folder. Typed replies are not spoken unless `speakTypedReplies` is `true`.
 
@@ -195,6 +211,8 @@ File: `~/.claude-avatar/config.json`. Created on first launch. Reloaded when it 
 | `projectRoots` | `["~/personal", "~/work"]` | Folders that `find_project` searches (one level). |
 | `jobPermissionMode` | `""` | `--permission-mode` for jobs. Empty means `manual` with the app's confirmation check. |
 | `jobTimeoutMinutes` | `30` | A job is stopped after this time. |
+| `fernModel`, `fernEffort` | `""` | Fern's model and effort. Empty means the Claude default. Set them with `/model` and `/effort`. |
+| `checkClaudeUpdates` | `true` | Check for a newer Claude Code every 6 hours. |
 
 ## 6. Permissions
 

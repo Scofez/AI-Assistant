@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('fern', {
   onTab: listen('panel:tab'),
   onSelect: listen('panel:select'),
   onResumeList: listen('panel:resume-list'),
+  onCommands: listen('panel:commands'),
+  onStatus: listen('panel:status'),
   onHistory: listen('panel:history'),
   resume: (id) => ipcRenderer.send('panel:resume', id),
   onApproval: listen('panel:approval'),
